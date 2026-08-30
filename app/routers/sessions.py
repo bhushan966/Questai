@@ -28,26 +28,34 @@ BUCKET_NAME = "interview-videos"
 
 @router.post("/", response_model=schemas.SessionOut)
 def create_session(session: schemas.SessionCreate, db: Session = Depends(get_db)):
-    db_session = models.InterviewSession(**session.model_dump())
+    db_session = models.InterviewSession(
+        job_role_id=session.job_role_id,
+        candidate_id=session.candidate_id,
+    )
     db.add(db_session)
     db.commit()
     db.refresh(db_session)
 
     questions = (
         db.query(models.Question)
-        .filter(models.Question.job_role_id == session.job_role_id)
+        .filter(
+            models.Question.job_role_id == session.job_role_id,
+            models.Question.generated_by == session.question_source,
+        )
         .order_by(models.Question.order_index)
         .all()
     )
     if not questions:
-        raise HTTPException(status_code=400, detail="No questions found for this job role")
+        raise HTTPException(
+            status_code=400,
+            detail=f"No '{session.question_source}' questions found for this job role",
+        )
 
     for q in questions:
         db.add(models.SessionAnswer(session_id=db_session.id, question_id=q.id))
     db.commit()
 
     return db_session
-
 
 @router.get("/{session_id}", response_model=schemas.SessionOut)
 def get_session(session_id: str, db: Session = Depends(get_db)):

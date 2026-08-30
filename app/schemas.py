@@ -21,7 +21,7 @@ class JobRoleOut(JobRoleCreate):
 class SessionCreate(BaseModel):
     job_role_id: UUID
     candidate_id: UUID
-
+    question_source: str = "ai"  # "ai" or "manual"
 
 class SessionOut(BaseModel):
     id: UUID
@@ -52,6 +52,22 @@ class SessionSummaryOut(BaseModel):
     candidate_id: UUID
     status: str
     created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class QuestionCreate(BaseModel):
+    question_text: str
+    answer_seconds: int = 90
+
+
+class QuestionOut(BaseModel):
+    id: UUID
+    question_text: str
+    order_index: int
+    generated_by: str
+    think_seconds: int
+    answer_seconds: int
 
     class Config:
         from_attributes = True
