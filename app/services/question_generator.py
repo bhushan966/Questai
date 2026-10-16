@@ -24,7 +24,7 @@ def generate_questions(title: str, description: str, skills_required: str, num_q
     ]"""
 
     response = client.chat.completions.create(
-        model="openai/gpt-oss-20b",
+        model="openai/gpt-oss-120b",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
     )

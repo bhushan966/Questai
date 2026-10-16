@@ -12,6 +12,8 @@ from app.auth import get_current_user
 from supabase import create_client
 import shutil as shutil_module
 
+from app.services.conversation_engine import get_next_ai_turn, generate_verdict
+
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -31,11 +33,15 @@ def create_session(session: schemas.SessionCreate, db: Session = Depends(get_db)
     db_session = models.InterviewSession(
         job_role_id=session.job_role_id,
         candidate_id=session.candidate_id,
+        mode=session.mode,
     )
     db.add(db_session)
     db.commit()
     db.refresh(db_session)
 
+    if session.mode == "conversational":
+        return db_session
+    
     questions = (
         db.query(models.Question)
         .filter(
@@ -64,6 +70,75 @@ def get_session(session_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Session not found")
     return db_session
 
+
+@router.post("/{session_id}/start")
+def start_conversation(session_id: str, db: Session = Depends(get_db)):
+    db_session = db.query(models.InterviewSession).filter(models.InterviewSession.id == session_id).first()
+    if not db_session or db_session.mode != "conversational":
+        raise HTTPException(status_code=404, detail="Conversational session not found")
+
+    existing = (
+        db.query(models.ConversationTurn)
+        .filter(models.ConversationTurn.session_id == session_id)
+        .order_by(models.ConversationTurn.order_index)
+        .all()
+    )
+    if existing:
+        last_ai = next((t for t in reversed(existing) if t.role == "ai"), None)
+        return {"message": last_ai.content if last_ai else "", "action": "resume"}
+
+    job_role = db.query(models.JobRole).filter(models.JobRole.id == db_session.job_role_id).first()
+    topics = [q.question_text for q in job_role.questions] or [f"{job_role.title} relevant experience"]
+
+    try:
+        result = get_next_ai_turn(job_role.title, job_role.description, job_role.skills_required or "", topics, [])
+    except Exception as e:
+        print(f"Conversation engine failed on start: {e}")
+        result = {
+            "message": "Hi, thanks for joining. To start, could you tell me a bit about yourself and your background?",
+            "action": "next_topic",
+        }
+
+    db.add(models.ConversationTurn(session_id=session_id, role="ai", content=result["message"], order_index=0))
+    db.commit()
+    return {"message": result["message"], "action": result["action"]}
+
+@router.get("/{session_id}/turns")
+def list_turns(session_id: str, db: Session = Depends(get_db)):
+    turns = (
+        db.query(models.ConversationTurn)
+        .filter(models.ConversationTurn.session_id == session_id)
+        .order_by(models.ConversationTurn.order_index)
+        .all()
+    )
+    return {"turns": [{"role": t.role, "content": t.content} for t in turns]}
+
+
+@router.get("/{session_id}/turns/recruiter-view")
+def list_turns_for_recruiter(
+    session_id: str,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    db_session = (
+        db.query(models.InterviewSession)
+        .join(models.JobRole, models.InterviewSession.job_role_id == models.JobRole.id)
+        .filter(models.InterviewSession.id == session_id, models.JobRole.owner_id == user_id)
+        .first()
+    )
+    if not db_session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    turns = (
+        db.query(models.ConversationTurn)
+        .filter(models.ConversationTurn.session_id == session_id)
+        .order_by(models.ConversationTurn.order_index)
+        .all()
+    )
+    return {
+        "turns": [{"role": t.role, "content": t.content} for t in turns],
+        "verdict": db_session.verdict,
+    }
 
 # Candidate-facing — NO auth, used by /interview/[sessionId]
 @router.get("/{session_id}/answers", response_model=list[schemas.SessionAnswerOut])
@@ -188,3 +263,53 @@ def submit_session(session_id: str, db: Session = Depends(get_db)):
     db_session.status = "submitted"
     db.commit()
     return {"session_id": session_id, "status": "submitted"}
+
+@router.post("/{session_id}/turns")
+def submit_candidate_turn(session_id: str, payload: schemas.TurnSubmit, db: Session = Depends(get_db)):
+    db_session = db.query(models.InterviewSession).filter(models.InterviewSession.id == session_id).first()
+    if not db_session or db_session.mode != "conversational":
+        raise HTTPException(status_code=404, detail="Conversational session not found")
+    if db_session.status == "submitted":
+        raise HTTPException(status_code=400, detail="Interview already completed")
+
+    job_role = db.query(models.JobRole).filter(models.JobRole.id == db_session.job_role_id).first()
+
+    existing_turns = (
+        db.query(models.ConversationTurn)
+        .filter(models.ConversationTurn.session_id == session_id)
+        .order_by(models.ConversationTurn.order_index)
+        .all()
+    )
+
+    next_index = len(existing_turns)
+    db.add(models.ConversationTurn(
+        session_id=session_id, role="candidate", content=payload.transcript, order_index=next_index
+    ))
+    db.commit()
+
+    history = [{"role": t.role, "content": t.content} for t in existing_turns] + [
+        {"role": "candidate", "content": payload.transcript}
+    ]
+    topics = [q.question_text for q in job_role.questions] or [f"{job_role.title} relevant experience"]
+
+    try:
+        result = get_next_ai_turn(job_role.title, job_role.description, job_role.skills_required or "", topics, history)
+    except Exception as e:
+        print(f"Conversation engine failed: {e}")
+        result = {"message": "Sorry, I didn't catch that. Could you say that again?", "action": "follow_up"}
+
+    db.add(models.ConversationTurn(
+        session_id=session_id, role="ai", content=result["message"], order_index=next_index + 1
+    ))
+
+    if result["action"] == "conclude":
+        full_history = history + [{"role": "ai", "content": result["message"]}]
+        try:
+            db_session.verdict = generate_verdict(job_role.title, job_role.skills_required or "", full_history)
+        except Exception as e:
+            print(f"Verdict generation failed: {e}")
+            db_session.verdict = "Verdict could not be generated automatically."
+        db_session.status = "submitted"
+
+    db.commit()
+    return {"message": result["message"], "action": result["action"]}

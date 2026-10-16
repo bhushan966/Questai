@@ -41,6 +41,9 @@ class InterviewSession(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     answers = relationship("SessionAnswer", back_populates="session")
+    
+    mode = Column(String, default="recorded") 
+    verdict = Column(Text, nullable=True) 
 
 class SessionAnswer(Base):
     __tablename__ = "session_answers"
@@ -55,3 +58,13 @@ class SessionAnswer(Base):
 
     session = relationship("InterviewSession", back_populates="answers")
     question = relationship("Question")  # <-- add this line
+
+class ConversationTurn(Base):
+    __tablename__ = "conversation_turns"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.id"), nullable=False)
+    role = Column(String, nullable=False)  # "ai" or "candidate"
+    content = Column(Text, nullable=False)
+    order_index = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)

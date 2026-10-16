@@ -21,13 +21,18 @@ class JobRoleOut(JobRoleCreate):
 class SessionCreate(BaseModel):
     job_role_id: UUID
     candidate_id: UUID
-    question_source: str = "ai"  # "ai" or "manual"
+    question_source: str = "ai"
+    mode: str = "recorded"
 
+
+class TurnSubmit(BaseModel):
+    transcript: str
 class SessionOut(BaseModel):
     id: UUID
     job_role_id: UUID
     candidate_id: UUID
     status: str
+    mode: Optional[str] = "recorded"
     created_at: datetime
 
     class Config:
@@ -46,11 +51,11 @@ class SessionAnswerOut(BaseModel):
 
     class Config:
         from_attributes = True
-
 class SessionSummaryOut(BaseModel):
     id: UUID
     candidate_id: UUID
     status: str
+    mode: Optional[str] = "recorded"
     created_at: datetime
 
     class Config:
