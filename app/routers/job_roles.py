@@ -7,9 +7,9 @@ from app.auth import get_current_user
 
 router = APIRouter(prefix="/job-roles", tags=["job-roles"])
 
-@router.get("/", response_model=list[schemas.JobRoleOut])
-def list_job_roles(db: Session = Depends(get_db), user_id: str = Depends(get_current_user)):
-    return db.query(models.JobRole).order_by(models.JobRole.created_at.desc()).all()
+# @router.get("/", response_model=list[schemas.JobRoleOut])
+# def list_job_roles(db: Session = Depends(get_db), user_id: str = Depends(get_current_user)):
+#     return db.query(models.JobRole).order_by(models.JobRole.created_at.desc()).all()
 
 @router.post("/", response_model=schemas.JobRoleOut)
 def create_job_role(job_role: schemas.JobRoleCreate, db: Session = Depends(get_db), user_id: str = Depends(get_current_user)):
@@ -167,3 +167,25 @@ def delete_question(
     return {"deleted": True}
 
 
+# In job_roles.py
+
+@router.patch("/{job_role_id}", response_model=schemas.JobRoleOut)
+def update_job_role(job_role_id: str, updates: schemas.JobRoleCreate, db: Session = Depends(get_db), user_id: str = Depends(get_current_user)):
+    role = db.query(models.JobRole).filter(models.JobRole.id == job_role_id, models.JobRole.owner_id == user_id).first()
+    if not role:
+        raise HTTPException(status_code=404, detail="Job role not found")
+    role.title = updates.title
+    role.description = updates.description
+    role.skills_required = updates.skills_required
+    db.commit()
+    db.refresh(role)
+    return role
+
+@router.delete("/{job_role_id}")
+def delete_job_role(job_role_id: str, db: Session = Depends(get_db), user_id: str = Depends(get_current_user)):
+    role = db.query(models.JobRole).filter(models.JobRole.id == job_role_id, models.JobRole.owner_id == user_id).first()
+    if not role:
+        raise HTTPException(status_code=404, detail="Job role not found")
+    db.delete(role)
+    db.commit()
+    return {"deleted": True, "id": job_role_id}

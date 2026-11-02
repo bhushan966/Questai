@@ -68,3 +68,4 @@ class ConversationTurn(Base):
     content = Column(Text, nullable=False)
     order_index = Column(Integer, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+    video_url = Column(String, nullable=True)

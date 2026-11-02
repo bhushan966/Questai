@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 from datetime import datetime
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from app.database import get_db
@@ -20,13 +21,17 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# FFMPEG_PATH = r"C:\Users\Admin\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0-full_build\bin\ffmpeg.exe"
-FFMPEG_PATH = shutil_module.which("ffmpeg") or r"C:\Users\Admin\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0-full_build\bin\ffmpeg.exe"
+FFMPEG_PATH = shutil_module.which("ffmpeg") or "ffmpeg"
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 supabase_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 BUCKET_NAME = "interview-videos"
+
+MAX_AUDIO_BYTES = 5 * 1024 * 1024
+MAX_VIDEO_BYTES = 40 * 1024 * 1024
+ALLOWED_AUDIO_EXT = {".webm", ".wav", ".mp3", ".m4a", ".ogg", ".mp4"}
+
 
 @router.post("/", response_model=schemas.SessionOut)
 def create_session(session: schemas.SessionCreate, db: Session = Depends(get_db)):
@@ -41,7 +46,7 @@ def create_session(session: schemas.SessionCreate, db: Session = Depends(get_db)
 
     if session.mode == "conversational":
         return db_session
-    
+
     questions = (
         db.query(models.Question)
         .filter(
@@ -62,6 +67,7 @@ def create_session(session: schemas.SessionCreate, db: Session = Depends(get_db)
     db.commit()
 
     return db_session
+
 
 @router.get("/{session_id}", response_model=schemas.SessionOut)
 def get_session(session_id: str, db: Session = Depends(get_db)):
@@ -103,6 +109,7 @@ def start_conversation(session_id: str, db: Session = Depends(get_db)):
     db.commit()
     return {"message": result["message"], "action": result["action"]}
 
+
 @router.get("/{session_id}/turns")
 def list_turns(session_id: str, db: Session = Depends(get_db)):
     turns = (
@@ -136,9 +143,10 @@ def list_turns_for_recruiter(
         .all()
     )
     return {
-        "turns": [{"role": t.role, "content": t.content} for t in turns],
+        "turns": [{"role": t.role, "content": t.content, "video_url": t.video_url} for t in turns],
         "verdict": db_session.verdict,
     }
+
 
 # Candidate-facing — NO auth, used by /interview/[sessionId]
 @router.get("/{session_id}/answers", response_model=list[schemas.SessionAnswerOut])
@@ -193,7 +201,6 @@ def get_session_answers_for_recruiter(session_id: str, db: Session = Depends(get
         )
         for a in answers
     ]
-
 
 
 @router.post("/{session_id}/answers/{answer_id}/upload")
@@ -254,6 +261,7 @@ def upload_answer_video(session_id: str, answer_id: str, file: UploadFile = File
         "transcript": db_answer.transcript,
     }
 
+
 @router.post("/{session_id}/submit")
 def submit_session(session_id: str, db: Session = Depends(get_db)):
     db_session = db.query(models.InterviewSession).filter(models.InterviewSession.id == session_id).first()
@@ -263,6 +271,7 @@ def submit_session(session_id: str, db: Session = Depends(get_db)):
     db_session.status = "submitted"
     db.commit()
     return {"session_id": session_id, "status": "submitted"}
+
 
 @router.post("/{session_id}/turns")
 def submit_candidate_turn(session_id: str, payload: schemas.TurnSubmit, db: Session = Depends(get_db)):
@@ -282,10 +291,12 @@ def submit_candidate_turn(session_id: str, payload: schemas.TurnSubmit, db: Sess
     )
 
     next_index = len(existing_turns)
-    db.add(models.ConversationTurn(
+    candidate_turn = models.ConversationTurn(
         session_id=session_id, role="candidate", content=payload.transcript, order_index=next_index
-    ))
+    )
+    db.add(candidate_turn)
     db.commit()
+    candidate_turn_id = str(candidate_turn.id)
 
     history = [{"role": t.role, "content": t.content} for t in existing_turns] + [
         {"role": "candidate", "content": payload.transcript}
@@ -312,4 +323,90 @@ def submit_candidate_turn(session_id: str, payload: schemas.TurnSubmit, db: Sess
         db_session.status = "submitted"
 
     db.commit()
-    return {"message": result["message"], "action": result["action"]}
+    return {"message": result["message"], "action": result["action"], "turn_id": candidate_turn_id}
+
+
+@router.post("/{session_id}/turns/{turn_id}/video")
+def upload_turn_video(session_id: str, turn_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    # Deliberately allowed after the interview concludes: the last clip is usually still uploading then.
+    turn = (
+        db.query(models.ConversationTurn)
+        .filter(
+            models.ConversationTurn.id == turn_id,
+            models.ConversationTurn.session_id == session_id,
+            models.ConversationTurn.role == "candidate",
+        )
+        .first()
+    )
+    if not turn:
+        raise HTTPException(status_code=404, detail="Turn not found")
+    if turn.video_url:
+        return {"video_url": turn.video_url}  # already uploaded, ignore retries
+
+    data = file.file.read(MAX_VIDEO_BYTES + 1)
+    if len(data) > MAX_VIDEO_BYTES:
+        raise HTTPException(status_code=413, detail="Video too large")
+    if len(data) < 1000:
+        raise HTTPException(status_code=400, detail="Video too small")
+
+    filename = f"live_{session_id}_{turn_id}.webm"
+    raw_path = os.path.join(UPLOAD_DIR, f"raw_{filename}")
+    final_path = os.path.join(UPLOAD_DIR, filename)
+
+    try:
+        with open(raw_path, "wb") as f:
+            f.write(data)
+
+        result = subprocess.run(
+            [FFMPEG_PATH, "-y", "-i", raw_path, "-c", "copy", final_path],
+            capture_output=True,
+        )
+        if result.returncode != 0 or not os.path.exists(final_path):
+            raise HTTPException(status_code=500, detail="Video processing failed")
+
+        with open(final_path, "rb") as f:
+            supabase_client.storage.from_(BUCKET_NAME).upload(
+                filename, f, file_options={"content-type": "video/webm", "upsert": "true"}
+            )
+        public_url = supabase_client.storage.from_(BUCKET_NAME).get_public_url(filename)
+    finally:
+        for p in (raw_path, final_path):
+            if os.path.exists(p):
+                os.remove(p)
+
+    turn.video_url = public_url
+    db.commit()
+    return {"video_url": public_url}
+
+
+@router.post("/{session_id}/transcribe")
+def transcribe_turn_audio(session_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    db_session = db.query(models.InterviewSession).filter(models.InterviewSession.id == session_id).first()
+    if not db_session or db_session.mode != "conversational":
+        raise HTTPException(status_code=404, detail="Conversational session not found")
+    if db_session.status == "submitted":
+        raise HTTPException(status_code=400, detail="Interview already completed")
+
+    data = file.file.read(MAX_AUDIO_BYTES + 1)
+    if len(data) > MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail="Audio too large")
+    if len(data) < 1000:
+        return {"transcript": ""}
+
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in ALLOWED_AUDIO_EXT:
+        ext = ".webm"
+    temp_path = os.path.join(UPLOAD_DIR, f"turn_{uuid.uuid4().hex}{ext}")
+
+    with open(temp_path, "wb") as f:
+        f.write(data)
+    try:
+        text = transcribe_audio(temp_path)
+    except Exception as e:
+        print(f"Turn transcription failed: {e}")
+        raise HTTPException(status_code=502, detail="Transcription failed")
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+    return {"transcript": (text or "").strip()}

@@ -27,6 +27,7 @@ class SessionCreate(BaseModel):
 
 class TurnSubmit(BaseModel):
     transcript: str
+
 class SessionOut(BaseModel):
     id: UUID
     job_role_id: UUID
@@ -37,7 +38,7 @@ class SessionOut(BaseModel):
 
     class Config:
         from_attributes = True
-
+        
 class SessionAnswerOut(BaseModel):
     id: UUID
     question_id: UUID
