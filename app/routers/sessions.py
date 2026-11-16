@@ -38,6 +38,7 @@ def create_session(session: schemas.SessionCreate, db: Session = Depends(get_db)
     db_session = models.InterviewSession(
         job_role_id=session.job_role_id,
         candidate_id=session.candidate_id,
+        candidate_name=session.candidate_name,
         mode=session.mode,
     )
     db.add(db_session)

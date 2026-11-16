@@ -23,6 +23,7 @@ class SessionCreate(BaseModel):
     candidate_id: UUID
     question_source: str = "ai"
     mode: str = "recorded"
+    candidate_name: Optional[str] = None
 
 
 class TurnSubmit(BaseModel):
@@ -35,6 +36,7 @@ class SessionOut(BaseModel):
     status: str
     mode: Optional[str] = "recorded"
     created_at: datetime
+    candidate_name: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -52,12 +54,14 @@ class SessionAnswerOut(BaseModel):
 
     class Config:
         from_attributes = True
+
 class SessionSummaryOut(BaseModel):
     id: UUID
     candidate_id: UUID
     status: str
     mode: Optional[str] = "recorded"
     created_at: datetime
+    candidate_name: Optional[str] = None
 
     class Config:
         from_attributes = True
