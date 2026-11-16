@@ -410,3 +410,30 @@ def transcribe_turn_audio(session_id: str, file: UploadFile = File(...), db: Ses
             os.remove(temp_path)
 
     return {"transcript": (text or "").strip()}
+
+
+@router.delete("/{session_id}")
+def delete_session(
+    session_id: str,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    db_session = (
+        db.query(models.InterviewSession)
+        .join(models.JobRole, models.InterviewSession.job_role_id == models.JobRole.id)
+        .filter(models.InterviewSession.id == session_id, models.JobRole.owner_id == user_id)
+        .first()
+    )
+    if not db_session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    db.query(models.SessionAnswer).filter(
+        models.SessionAnswer.session_id == session_id
+    ).delete(synchronize_session=False)
+    db.query(models.ConversationTurn).filter(
+        models.ConversationTurn.session_id == session_id
+    ).delete(synchronize_session=False)
+
+    db.delete(db_session)
+    db.commit()
+    return {"deleted": True, "id": session_id}

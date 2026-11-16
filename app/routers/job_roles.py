@@ -183,9 +183,35 @@ def update_job_role(job_role_id: str, updates: schemas.JobRoleCreate, db: Sessio
 
 @router.delete("/{job_role_id}")
 def delete_job_role(job_role_id: str, db: Session = Depends(get_db), user_id: str = Depends(get_current_user)):
-    role = db.query(models.JobRole).filter(models.JobRole.id == job_role_id, models.JobRole.owner_id == user_id).first()
+    role = db.query(models.JobRole).filter(
+        models.JobRole.id == job_role_id,
+        models.JobRole.owner_id == user_id,
+    ).first()
     if not role:
         raise HTTPException(status_code=404, detail="Job role not found")
+
+    session_ids = [
+        s.id
+        for s in db.query(models.InterviewSession.id)
+        .filter(models.InterviewSession.job_role_id == job_role_id)
+        .all()
+    ]
+
+    if session_ids:
+        db.query(models.SessionAnswer).filter(
+            models.SessionAnswer.session_id.in_(session_ids)
+        ).delete(synchronize_session=False)
+        db.query(models.ConversationTurn).filter(
+            models.ConversationTurn.session_id.in_(session_ids)
+        ).delete(synchronize_session=False)
+        db.query(models.InterviewSession).filter(
+            models.InterviewSession.job_role_id == job_role_id
+        ).delete(synchronize_session=False)
+
+    db.query(models.Question).filter(
+        models.Question.job_role_id == job_role_id
+    ).delete(synchronize_session=False)
+
     db.delete(role)
     db.commit()
     return {"deleted": True, "id": job_role_id}
