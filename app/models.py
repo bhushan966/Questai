@@ -37,9 +37,12 @@ class InterviewSession(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     job_role_id = Column(UUID(as_uuid=True), ForeignKey("job_roles.id"), nullable=False)
     candidate_id = Column(UUID(as_uuid=True), nullable=False)
-    candidate_name = Column(String, nullable=True)  # <-- ADD THIS LINE
-    status = Column(String, default="not_started")
+    candidate_name = Column(String, nullable=True)
+    status = Column(String, default="not_started")  # not_started / in_progress / submitted
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    answers = relationship("SessionAnswer", back_populates="session")
+
     mode = Column(String, default="recorded")
     verdict = Column(Text, nullable=True)
 
