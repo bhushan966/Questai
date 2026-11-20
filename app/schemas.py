@@ -1,8 +1,7 @@
 from pydantic import BaseModel
 from uuid import UUID
 from datetime import datetime
-from typing import Optional
-
+from typing import Optional, Dict, Any
 
 class JobRoleCreate(BaseModel):
     title: str
@@ -37,6 +36,7 @@ class SessionOut(BaseModel):
     mode: Optional[str] = "recorded"
     created_at: datetime
     candidate_name: Optional[str] = None
+    rating: Optional[Dict[str, Any]] = None
 
     class Config:
         from_attributes = True
@@ -51,6 +51,7 @@ class SessionAnswerOut(BaseModel):
     video_url: Optional[str] = None
     transcript: Optional[str] = None
     submitted_at: Optional[datetime] = None
+    
 
     class Config:
         from_attributes = True
@@ -62,9 +63,14 @@ class SessionSummaryOut(BaseModel):
     mode: Optional[str] = "recorded"
     created_at: datetime
     candidate_name: Optional[str] = None
+    rating: Optional[Dict[str, Any]] = None
 
     class Config:
         from_attributes = True
+
+class SessionUpdate(BaseModel):
+    rating: Optional[Dict[str, Any]] = None
+    status: Optional[str] = None
 
 class QuestionCreate(BaseModel):
     question_text: str

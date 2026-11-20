@@ -412,6 +412,34 @@ def transcribe_turn_audio(session_id: str, file: UploadFile = File(...), db: Ses
 
     return {"transcript": (text or "").strip()}
 
+@router.patch("/{session_id}", response_model=schemas.SessionOut)
+def update_session(
+    session_id: str,
+    payload: schemas.SessionUpdate,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    db_session = (
+        db.query(models.InterviewSession)
+        .join(models.JobRole, models.InterviewSession.job_role_id == models.JobRole.id)
+        .filter(
+            models.InterviewSession.id == session_id,
+            models.JobRole.owner_id == user_id,
+        )
+        .first()
+    )
+    if not db_session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if payload.rating is not None:
+        db_session.rating = payload.rating
+    if payload.status is not None:
+        db_session.status = payload.status
+
+    db.commit()
+    db.refresh(db_session)
+    return db_session
+
 
 @router.delete("/{session_id}")
 def delete_session(

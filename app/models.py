@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -45,6 +45,7 @@ class InterviewSession(Base):
 
     mode = Column(String, default="recorded")
     verdict = Column(Text, nullable=True)
+    rating = Column(JSONB, nullable=True)
 
 class SessionAnswer(Base):
     __tablename__ = "session_answers"
